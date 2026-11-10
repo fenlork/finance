@@ -1,0 +1,26 @@
+{
+  "name": "Финансы — личный трекер",
+  "short_name": "Финансы",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "ru",
+  "description": "Офлайн-трекер личных финансов",
+  "icons": [
+  {
+    "src": "icon.png",
+    "sizes": "512x512",
+    "type": "image/png",
+    "purpose": "any maskable"
+  },
+  {
+    "src": "icon.png",
+    "sizes": "180x180",
+    "type": "image/png"
+  }
+]
+  ]
+}
