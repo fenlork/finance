@@ -535,8 +535,11 @@
  
   <div class="field"><label class="switch"><input type="checkbox" id="budgetRepeat"><span>Повторять каждый месяц</span></label></div>
   <div class="field"><label class="switch"><input type="checkbox" id="budgetPlanned"><span>Плановый платёж</span></label></div>
-  <div class="field hidden" id="budgetDateField"><label>Дата платежа</label><input type="date" id="budgetDate"></div>
-  <div class="actions"><button class="btn btn-danger hidden" id="btnDeleteBudget">Убрать</button><button class="btn btn-primary" id="btnSaveBudget">Записать</button></div>
+  <div class="field hidden" id="budgetDateField">
+  <label>День платежа (1–31)</label>
+  <input type="number" id="budgetDay" min="1" max="31" placeholder="15" step="1">
+</div>
+  <div class="actions"><button class="btn btn-primary" id="btnSaveBudget">Записать</button></div>
 </div>
 
 <div class="sheet" id="sheetCategoryDetails">
@@ -1496,103 +1499,167 @@ document.getElementById('btnDeleteCategory').addEventListener('click', async () 
 
 function openBudgetSheet(type, catId = null) {
   const sel = document.getElementById('budgetCatSelect');
-  // Показываем ВСЕ категории нужного типа
-  sel.innerHTML = categories.filter(c => c.type === type && !c.isArchived).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  
+  sel.innerHTML = categories.filter(c => c.type === type && !c.isArchived)
+    .map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+
   if (catId) {
     sel.value = catId;
     sel.disabled = true;
   } else {
     sel.disabled = false;
   }
-  
+
   const doc = budgets.find(b => b.month === currentMonth);
   const line = catId && doc ? doc.lines.find(l => l.categoryId === catId) : null;
-  
+
   document.getElementById('budgetPlan').value = line ? line.plan : '';
-  
   document.getElementById('budgetRepeat').checked = line ? line.repeat : false;
-  
+
   const plannedCb = document.getElementById('budgetPlanned');
   const dateField = document.getElementById('budgetDateField');
-  
+
   plannedCb.checked = line ? line.isPlanned : false;
-  document.getElementById('budgetDate').value = line && line.payDate ? line.payDate : '';
-  
-  // Показываем поле даты, если включен "Плановый платеж"
+  document.getElementById('budgetDay').value = line && line.payDate
+    ? parseInt(line.payDate.slice(8, 10), 10)
+    : '';
+
   dateField.classList.toggle('hidden', !plannedCb.checked);
-  
-  // Поле даты будет появляться/исчезать при клике на переключатель
   plannedCb.onchange = () => {
     dateField.classList.toggle('hidden', !plannedCb.checked);
   };
-  
-  document.getElementById('btnDeleteBudget').classList.toggle('hidden', !line);
+
   openSheet('sheetBudget');
 }
+
+
+
 
 document.getElementById('btnSaveBudget').addEventListener('click', async () => {
   const catId = document.getElementById('budgetCatSelect').value;
   const plan = round2(parseFloat(document.getElementById('budgetPlan').value) || 0);
   const repeat = document.getElementById('budgetRepeat').checked;
   const planned = document.getElementById('budgetPlanned').checked;
-  const payDate = document.getElementById('budgetDate').value;
-  
+  const payDayRaw = parseInt(document.getElementById('budgetDay').value, 10);
+  const payDay = (payDayRaw >= 1 && payDayRaw <= 31) ? payDayRaw : null;
+
   if (!catId) return alert('Выберите категорию');
-  
+
   // 1. Сохраняем в текущий месяц
+  let payDate = null;
+  if (planned && payDay) {
+    const [y, m] = currentMonth.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const safeDay = Math.min(payDay, lastDay);
+    payDate = `${currentMonth}-${String(safeDay).padStart(2, '0')}`;
+  }
+
   let doc = budgets.find(b => b.month === currentMonth);
   if (!doc) { doc = { id: 'b_' + currentMonth, month: currentMonth, lines: [] }; budgets.push(doc); }
-  
+
   const existing = doc.lines.find(l => l.categoryId === catId);
-  if (existing) { 
-    existing.plan = plan; 
-    existing.repeat = repeat; 
-    existing.isPlanned = planned; 
-    existing.payDate = payDate; 
-  } else { 
-    doc.lines.push({ categoryId: catId, plan, repeat, isPlanned: planned, payDate }); 
+  if (existing) {
+    existing.plan = plan;
+    existing.repeat = repeat;
+    existing.isPlanned = planned;
+    existing.payDate = payDate;
+    existing.payDay = payDay;
+  } else {
+    doc.lines.push({ categoryId: catId, plan, repeat, isPlanned: planned, payDate, payDay });
   }
-  
   await dbPut('budgets', doc);
 
-  // 2. Если стоит галочка "Повторять", создаем копии на 12 месяцев вперед
+  // 2. Если стоит галочка "Повторять" — создаём/обновляем копии на 12 месяцев вперёд
   if (repeat) {
     for (let i = 1; i <= 12; i++) {
       const nextM = shiftMonth(currentMonth, i);
-      
+
       let futureDoc = budgets.find(b => b.month === nextM);
       if (!futureDoc) {
         futureDoc = { id: 'b_' + nextM, month: nextM, lines: [] };
         budgets.push(futureDoc);
       }
 
-      // Проверяем, нет ли уже такой категории в будущем месяце
-      const existsInFuture = futureDoc.lines.find(l => l.categoryId === catId);
-      if (!existsInFuture) {
+      // Формируем payDate для будущего месяца из дня
+      let futurePayDate = null;
+      if (planned && payDay) {
+        const [y, m] = nextM.split('-').map(Number);
+        const lastDay = new Date(y, m, 0).getDate();
+        const safeDay = Math.min(payDay, lastDay);
+        futurePayDate = `${nextM}-${String(safeDay).padStart(2, '0')}`;
+      }
+
+      const existingInFuture = futureDoc.lines.find(l => l.categoryId === catId);
+
+      if (existingInFuture) {
+        // Запись уже есть — обновляем, если она была создана через «Повторять»
+        if (existingInFuture.repeat) {
+          existingInFuture.plan = plan;
+          existingInFuture.isPlanned = planned;
+          existingInFuture.payDate = futurePayDate;
+          existingInFuture.payDay = payDay;
+          await dbPut('budgets', futureDoc);
+        }
+        // Если existingInFuture.repeat === false — ручная запись, не трогаем
+      } else {
+        // Записи нет — создаём новую
         futureDoc.lines.push({
           categoryId: catId,
           plan: plan,
           repeat: true,
           isPlanned: planned,
-          payDate: payDate
+          payDate: futurePayDate,
+          payDay: payDay
         });
         await dbPut('budgets', futureDoc);
       }
     }
   }
 
-  closeSheets(); await loadData(); renderAll();
+  closeSheets();
+  await loadData();
+  renderAll();
 });
 
 async function removeFromBudget(catId) {
-  if (!confirm('Убрать из бюджета?')) return;
+  const cat = categories.find(c => c.id === catId);
+  const name = cat ? cat.name : 'категорию';
+
+  const currentIdx = parseInt(currentMonth.slice(0, 4)) * 12 + parseInt(currentMonth.slice(5, 7));
+  const futureMonthsWithRepeat = budgets.filter(b => {
+    if (b.month === currentMonth) return false;
+    const bIdx = parseInt(b.month.slice(0, 4)) * 12 + parseInt(b.month.slice(5, 7));
+    if (bIdx <= currentIdx) return false;
+    return b.lines.some(l => l.categoryId === catId && l.repeat);
+  });
+
+  let deleteAll = false;
+  if (futureMonthsWithRepeat.length > 0) {
+    const msg = `«${name}» повторяется в ${futureMonthsWithRepeat.length} будущих месяцах.\n\n` +
+                `OK — удалить во ВСЕХ месяцах\n` +
+                `Отмена — удалить ТОЛЬКО в текущем (${monthLabel(currentMonth)})`;
+    deleteAll = confirm(msg);
+  } else {
+    if (!confirm(`Убрать «${name}» из бюджета (${monthLabel(currentMonth)})?`)) return;
+  }
+
   const doc = budgets.find(b => b.month === currentMonth);
   if (doc) {
     doc.lines = doc.lines.filter(l => l.categoryId !== catId);
     await dbPut('budgets', doc);
-    await loadData(); renderAll();
   }
+
+  if (deleteAll) {
+    for (const b of futureMonthsWithRepeat) {
+      const before = b.lines.length;
+      b.lines = b.lines.filter(l => !(l.categoryId === catId && l.repeat));
+      if (b.lines.length !== before) {
+        await dbPut('budgets', b);
+      }
+    }
+  }
+
+  await loadData();
+  renderAll();
 }
 function refreshOpAccounts() {
   const accSel = document.getElementById('opAccount');
