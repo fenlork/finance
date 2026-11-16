@@ -698,7 +698,10 @@ const fmtNum = (n, d = 2) => Number(n || 0).toLocaleString('ru-RU', { minimumFra
 const CUR_SYM = { RUB: '₽', USD: '$', EUR: '€' };
 const MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const MONTHS_RU_SHORT = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
-
+// Математическое округление до 2 знаков (защита от float-дрейфа)
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
 function monthLabel(iso) {
   if (!iso) return '—';
   const [y, m] = iso.split('-');
@@ -829,7 +832,7 @@ function getTotalBalance() {
   accounts.filter(a => a.type === 'deposit').forEach(d => {
     total += Number(d.balance) || 0;
   });
-  return total;
+  return round2(total);
 }
 
 function getAverageExpense() {
@@ -855,7 +858,7 @@ function getDepositTax() {
   }
   const exemptLimit = 1000000 * (settings.keyRate / 100);
   const taxable = Math.max(0, totalIncome - exemptLimit);
-  return { totalIncome, tax: taxable * 0.15 };
+  return { totalIncome: round2(totalIncome), tax: round2(taxable * 0.15) };
 }
 
 /* ============================================================
@@ -1142,43 +1145,113 @@ function renderReports() {
   chartEl.innerHTML = chartHtml;
   tableEl.innerHTML = tableHtml;
 
-  // 3. Аномалии (за выбранный месяц или год)
-  const anEl = document.getElementById('repAnomalies');
-  if (anEl) {
-    const anomalies = [];
+ // 3. Аномалии (за выбранный месяц или год)
+const anEl = document.getElementById('repAnomalies');
+if (anEl) {
+  const anomalies = [];
+
+  if (reportPeriod === 'month') {
+    // === МЕСЯЧНЫЙ РЕЖИМ: текущий месяц vs среднее за 3 предыдущих ===
     const monthsToCheck = [];
     for (let i = 1; i <= 3; i++) monthsToCheck.push(shiftMonth(currentMonth, -i));
-    
+
     const avgByCat = {};
+    let validMonthsCount = 0;
     for (const m of monthsToCheck) {
+      let hasExpense = false;
       operations.filter(o => o.month === m && o.type === 'expense').forEach(o => {
-        avgByCat[o.categoryId] = (avgByCat[o.categoryId] || 0) + o.amount / 3;
+        avgByCat[o.categoryId] = (avgByCat[o.categoryId] || 0) + o.amount;
+        hasExpense = true;
       });
+      if (hasExpense) validMonthsCount++;
     }
-    
+
+    // делим на количество месяцев, где реально были расходы
+    if (validMonthsCount > 0) {
+      for (const k of Object.keys(avgByCat)) {
+        avgByCat[k] = avgByCat[k] / validMonthsCount;
+      }
+    }
+
     const curByCat = {};
     ops.filter(o => o.type === 'expense').forEach(o => {
       curByCat[o.categoryId] = (curByCat[o.categoryId] || 0) + o.amount;
     });
-    
+
     for (const [catId, cur] of Object.entries(curByCat)) {
       const avg = avgByCat[catId] || 0;
-      if (reportPeriod === 'month' && avg > 0 && cur > avg * 1.2) {
+      if (avg > 0 && cur > avg * 1.2) {
         const cat = categories.find(c => c.id === catId);
         const name = cat ? cat.name : '—';
         const percent = Math.round((cur / avg - 1) * 100);
         anomalies.push(`⚠ «${name}» выросла на ${percent}% (сейчас ${fmtNum(cur)} ₽, обычно ${fmtNum(avg)} ₽)`);
       }
     }
-    
+
     if (anomalies.length === 0) {
       anEl.innerHTML = '<div class="empty" style="padding:10px;font-size:12px;color:var(--green);">Аномалий не обнаружено 👍</div>';
     } else {
-      anEl.innerHTML = anomalies.map(text => 
+      anEl.innerHTML = anomalies.map(text =>
         `<div class="report-card" style="background:rgba(217,107,107,0.1);border-color:rgba(217,107,107,0.3);color:var(--danger);font-size:13px;">${text}</div>`
       ).join('');
     }
+
+  } else {
+    // === ГОДОВОЙ РЕЖИМ: текущий год vs среднее за 2 предыдущих ===
+    const currentYear = parseInt(currentMonth.slice(0, 4));
+    const prevYear1 = String(currentYear - 1);
+    const prevYear2 = String(currentYear - 2);
+
+    // Собираем средние по категориям за 2 предыдущих года
+    const avgByCat = {};
+    const yearsWithData = new Set();
+    for (const y of [prevYear1, prevYear2]) {
+      let hasExpense = false;
+      operations.filter(o => o.date.startsWith(y) && o.type === 'expense').forEach(o => {
+        avgByCat[o.categoryId] = (avgByCat[o.categoryId] || 0) + o.amount;
+        hasExpense = true;
+      });
+      if (hasExpense) yearsWithData.add(y);
+    }
+
+    // Делим на количество лет, где реально были расходы (1 или 2)
+    const divisor = yearsWithData.size;
+    if (divisor > 0) {
+      for (const k of Object.keys(avgByCat)) {
+        avgByCat[k] = avgByCat[k] / divisor;
+      }
+    }
+
+    // Факт за текущий год
+    const curByCat = {};
+    operations.filter(o => o.date.startsWith(String(currentYear)) && o.type === 'expense').forEach(o => {
+      curByCat[o.categoryId] = (curByCat[o.categoryId] || 0) + o.amount;
+    });
+
+    // Если нет данных за прошлые годы — показать заглушку
+    if (divisor === 0) {
+      anEl.innerHTML = '<div class="empty" style="padding:10px;font-size:12px;color:var(--muted);">Недостаточно данных за прошлые годы для сравнения</div>';
+    } else {
+      for (const [catId, cur] of Object.entries(curByCat)) {
+        const avg = avgByCat[catId] || 0;
+        if (avg > 0 && cur > avg * 1.2) {
+          const cat = categories.find(c => c.id === catId);
+          const name = cat ? cat.name : '—';
+          const percent = Math.round((cur / avg - 1) * 100);
+          anomalies.push(`⚠ «${name}» выросла на ${percent}% (${currentYear}: ${fmtNum(cur)} ₽, обычно ${fmtNum(avg)} ₽/год)`);
+        }
+      }
+
+      if (anomalies.length === 0) {
+        anEl.innerHTML = '<div class="empty" style="padding:10px;font-size:12px;color:var(--green);">Аномалий не обнаружено 👍</div>';
+      } else {
+        anEl.innerHTML = anomalies.map(text =>
+          `<div class="report-card" style="background:rgba(217,107,107,0.1);border-color:rgba(217,107,107,0.3);color:var(--danger);font-size:13px;">${text}</div>`
+        ).join('');
+      }
+    }
   }
+}
 
   // 4. Облако тегов (за выбранный месяц или год)
   const tagEl = document.getElementById('repTags');
@@ -1261,7 +1334,7 @@ document.getElementById('btnCreateAccount').addEventListener('click', () => open
 
 document.getElementById('btnSaveAccount').addEventListener('click', async () => {
   const name = document.getElementById('accName').value.trim();
-  const balance = parseFloat(document.getElementById('accBalance').value) || 0;
+  const balance = round2(parseFloat(document.getElementById('accBalance').value) || 0);
   const currency = document.getElementById('accCurrency').value;
   if (!name) return alert('Введите название');
   if (editingAccId) {
@@ -1318,16 +1391,15 @@ document.getElementById('btnCreateDeposit').addEventListener('click', () => open
 
 document.getElementById('btnSaveDeposit').addEventListener('click', async () => {
   const name = document.getElementById('depBank').value.trim();
-  const mainSum = parseFloat(document.getElementById('depAmount').value) || 0;
+  const mainSum = round2(parseFloat(document.getElementById('depAmount').value) || 0);
   const rate = parseFloat(document.getElementById('depRate').value) || 0;
   const startDate = document.getElementById('depStart').value;
   const endDate = document.getElementById('depEnd').value;
   const payType = document.getElementById('depPayType').value;
   const status = document.getElementById('depStatus').value;
-  const expectedIncome = parseFloat(document.getElementById('depExpectedIncome').value) || 0;
-  
-  if (!name || !startDate || !endDate) return alert('Заполните все поля');
+  const expectedIncome = round2(parseFloat(document.getElementById('depExpectedIncome').value) || 0);
 
+  if (!name || !startDate || !endDate) return alert('Заполните все поля');
   if (editingDepId) {
     const dep = accounts.find(a => a.id === editingDepId);
     dep.name = name;
@@ -1461,7 +1533,7 @@ function openBudgetSheet(type, catId = null) {
 
 document.getElementById('btnSaveBudget').addEventListener('click', async () => {
   const catId = document.getElementById('budgetCatSelect').value;
-  const plan = parseFloat(document.getElementById('budgetPlan').value) || 0;
+  const plan = round2(parseFloat(document.getElementById('budgetPlan').value) || 0);
   const repeat = document.getElementById('budgetRepeat').checked;
   const planned = document.getElementById('budgetPlanned').checked;
   const payDate = document.getElementById('budgetDate').value;
@@ -1760,7 +1832,13 @@ document.getElementById('btnExportDb').addEventListener('click', async () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'finance_backup_' + getLocalDate() + '.json';
+  const now = new Date();
+const stamp = now.getFullYear() + '-' +
+  String(now.getMonth() + 1).padStart(2, '0') + '-' +
+  String(now.getDate()).padStart(2, '0') + '_' +
+  String(now.getHours()).padStart(2, '0') + '-' +
+  String(now.getMinutes()).padStart(2, '0');
+a.download = `finance_backup_${stamp}.json`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -1940,6 +2018,19 @@ function openCategoryDetails(type, id) {
 
   openSheet('sheetCategoryDetails');
 }
+// === КНОПКА «РЕДАКТИРОВАТЬ» В ДЕТАЛЯХ КАТЕГОРИИ ===
+document.getElementById('btnEditFromDetails').addEventListener('click', () => {
+  if (!currentDetailCat || !currentDetailCat.cat) {
+    console.warn('currentDetailCat не установлен');
+    return;
+  }
+  const type = currentDetailCat.type;
+  const catId = currentDetailCat.cat.id;
+  closeSheets();
+  setTimeout(() => {
+    openBudgetSheet(type, catId);
+  }, 300);
+});
 async function loadData() {
   accounts = await dbGetAll('accounts');
   categories = await dbGetAll('categories');
@@ -2062,7 +2153,7 @@ async function recalculateAccountBalance(accId) {
     }
   });
 
-  acc.balance = balance;
+  acc.balance = round2(balance);
   await dbPut('accounts', acc);
 }
 
@@ -2076,8 +2167,8 @@ async function recalculateAllAccounts() {
 }
 
 async function saveOperation() {
-  const amount = parseFloat(document.getElementById('opAmount').value) || 0;
-  const amountTo = parseFloat(document.getElementById('opAmountTo').value) || 0;
+  const amount = round2(parseFloat(document.getElementById('opAmount').value) || 0);
+const amountTo = round2(parseFloat(document.getElementById('opAmountTo').value) || 0);
   const date = document.getElementById('opDate').value;
   const accId = document.getElementById('opAccount').value;
   const toAccId = document.getElementById('opToAccount').value;
