@@ -1294,11 +1294,14 @@ if (anEl) {
   // 4. Облако тегов (за выбранный месяц или год)
   const tagEl = document.getElementById('repTags');
   if (tagEl) {
-    const tags = {};
+        const tags = {};
     ops.forEach(o => {
       if (o.tags && Array.isArray(o.tags)) {
         o.tags.forEach(t => {
-          if (t) tags[t] = (tags[t] || 0) + o.amount;
+          if (t) {
+            const key = String(t).trim().toLowerCase(); // <--- ВОТ ОНО
+            if (key) tags[key] = (tags[key] || 0) + o.amount;
+          }
         });
       }
     });
@@ -1819,7 +1822,9 @@ updateEffectiveRate();
   document.getElementById('opDate').value     = op ? op.date : getLocalDate();
   document.getElementById('opAmount').value   = op ? op.amount : '';
   document.getElementById('opAmountTo').value = op ? (op.amountTo || '') : '';
-  document.getElementById('opTags').value     = op && op.tags ? op.tags.join(', ') : '';
+  document.getElementById('opTags').value = op && op.tags
+  ? op.tags.map(t => t.toLowerCase()).join(', ')
+  : '';
 
   const accSel   = document.getElementById('opAccount');
   const toAccSel = document.getElementById('opToAccount');
@@ -1894,8 +1899,8 @@ function renderHistory() {
       }
       
       const tagsHtml = o.tags && o.tags.length > 0
-        ? `<div class="tag-list">${o.tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>`
-        : '';
+  ? `<div class="tag-list">${o.tags.map(t => `<span class="tag">${escapeHtml(String(t).toLowerCase())}</span>`).join('')}</div>`
+  : '';
       
       html += `
         <div class="op-item" onclick="closeSheets(); setTimeout(() => openOperationSheet('${o.id}'), 300);">
@@ -2285,7 +2290,11 @@ const amountTo = round2(parseFloat(document.getElementById('opAmountTo').value) 
   const toAccId = document.getElementById('opToAccount').value;
   const catId = document.getElementById('opCategory').value;
   const tagsRaw = document.getElementById('opTags').value.trim();
-  const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()) : [];
+// Разбиваем по запятой, обрезаем пробелы, приводим к нижнему регистру,
+// убираем пустые, удаляем дубликаты (Set)
+const tags = tagsRaw
+  ? [...new Set(tagsRaw.split(',').map(t => t.trim().toLowerCase()).filter(Boolean))]
+  : [];
 
   if (!accId) return alert('Выберите счёт');
   if (!catId && currentOpType !== 'transfer' && currentOpType !== 'currency') return alert('Выберите категорию');
