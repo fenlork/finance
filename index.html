@@ -1452,7 +1452,16 @@ function openCategoriesList() {
   openSheet('sheetCategoriesList');
 }
 document.getElementById('btnManageCategories').addEventListener('click', openCategoriesList);
-
+// === КНОПКА «ИСТОРИЯ» ===
+document.getElementById('btnHistory').addEventListener('click', () => {
+  const accSel = document.getElementById('historyFilterAccount');
+  if (accSel) {
+    accSel.innerHTML = '<option value="all">Все</option>' +
+      accounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
+  }
+  renderHistory();
+  openSheet('sheetHistory');
+});
 function renderCategoriesList() {
   const container = document.getElementById('categoriesListContainer');
   container.innerHTML = categories.filter(c => !c.isArchived).map(c => `
