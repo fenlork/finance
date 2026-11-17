@@ -342,10 +342,16 @@
     </button>
   </div>
 
-  <div class="section-title"><span>Плановые платежи</span></div>
+  <div class="section-title">
+    <span>Плановые платежи</span>
+    <span id="todayPlannedSum" style="color:var(--blue-deep); font-weight:800; font-size:12px; letter-spacing:0; text-transform:none;"></span>
+  </div>
   <div class="list" id="todayList" style="gap:0;"></div>
   
-  <div class="section-title"><span>Операции за день</span></div>
+  <div class="section-title">
+    <span>Операции за день</span>
+    <span id="todayOpsSum" style="color:var(--blue-deep); font-weight:800; font-size:12px; letter-spacing:0; text-transform:none;"></span>
+  </div>
   <div class="today-list" id="operationsList"></div>
 </div>
 
@@ -954,7 +960,12 @@ function renderToday() {
   const month = currentViewDate.slice(0, 7);
   const budgetDoc = budgets.find(b => b.month === month);
   const planned = budgetDoc ? budgetDoc.lines.filter(l => l.isPlanned && l.payDate) : [];
-
+  // === Сумма плановых платежей ===
+  const plannedSum = planned.reduce((s, l) => s + (Number(l.plan) || 0), 0);
+  const plannedSumEl = document.getElementById('todayPlannedSum');
+  if (plannedSumEl) {
+    plannedSumEl.textContent = planned.length > 0 ? fmtNum(plannedSum) + ' ₽' : '';
+  }
   const todayList = document.getElementById('todayList');
   if (planned.length === 0) {
     todayList.innerHTML = '<div class="empty">Нет плановых платежей</div>';
@@ -976,6 +987,30 @@ function renderToday() {
 
   const opsEl = document.getElementById('operationsList');
   const dayOps = operations.filter(o => o.date === currentViewDate);
+    // === Сумма операций за день ===
+  // Считаем только расходы и доходы (без переводов и валюты),
+  // чтобы сумма была осмысленной
+  let dayExpense = 0, dayIncome = 0;
+  dayOps.forEach(o => {
+    if (o.type === 'expense') dayExpense += Number(o.amount) || 0;
+    if (o.type === 'income')  dayIncome  += Number(o.amount) || 0;
+  });
+
+  const opsSumEl = document.getElementById('todayOpsSum');
+  if (opsSumEl) {
+    if (dayOps.length === 0) {
+      opsSumEl.textContent = '';
+    } else {
+      const parts = [];
+      if (dayExpense > 0) parts.push(`−${fmtNum(dayExpense)} ₽`);
+      if (dayIncome > 0)  parts.push(`+${fmtNum(dayIncome)} ₽`);
+      opsSumEl.textContent = parts.length > 0 ? parts.join(' · ') : '';
+      // Цвет: красный если только расходы, зелёный если только доходы
+      if (dayExpense > 0 && dayIncome === 0) opsSumEl.style.color = 'var(--danger)';
+      else if (dayIncome > 0 && dayExpense === 0) opsSumEl.style.color = 'var(--green)';
+      else opsSumEl.style.color = 'var(--blue-deep)';
+    }
+  }
   if (dayOps.length === 0) {
     opsEl.innerHTML = '<div class="empty">Нет операций</div>';
   } else {
